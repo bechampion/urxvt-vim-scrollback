@@ -1,5 +1,4 @@
 #! perl
-
 # This extension implements vim like scrollback buffer navigation, search, and
 # paste.  Initially based on the searchable-scrollback extension and some gf
 # related code borrowed from the matcher extension.
@@ -169,7 +168,10 @@ sub enter {
    $self->{pty_ev_events} = $self->pty_ev_events(urxvt::EV_NONE);
    $self->enable(
       key_press => \&key_press,
-      resize_all_windows => \&resize_window
+      resize_all_windows => \&resize_window,
+			tt_write      => \&tt_write,
+			refresh_begin   => \&refresh,
+			refresh_end   => \&refresh
    );
 
    my ($lnum, $cnum) = $self->screen_cur();
@@ -248,7 +250,7 @@ sub leave {
    my ($self, $event) = @_;
 
    $self->term_write_flush();
-   $self->disable("key_press", "resize_all_windows");
+   $self->disable("key_press", "tt_write" , "resize_all_windows","refresh_begin","refresh_end");
    $self->pty_ev_events($self->{pty_ev_events});
    $self->clear_selection($event);
    $self->screen_cur($self->{orig_lnum}, $self->{orig_cnum});
@@ -308,6 +310,11 @@ sub resize_window {
    $self->{orig_nrow} = $self->nrow;
 }
 
+sub tt_write {
+   my ($self, $event, $keysym, $string) =  @_;
+	 $self->{key_buffer} = $event;
+   return $self->key_press_search($event, $keysym, $event);
+}
 sub key_press {
    my ($self, $event, $keysym, $string) =  @_;
 
@@ -324,8 +331,6 @@ sub key_press {
 
 sub key_press_normal {
    my ($self, $event, $keysym, $string) =  @_;
-
-   $self->msg("");
    if ($keysym == 0xff1b ||
       $string =~ /^\cC$/ ||
       ($self->{key_buffer} =~ /^$/ && $keysym == 0xff0d))
@@ -355,7 +360,7 @@ sub key_press_normal {
    }
 
    # searching
-   if ($string =~ /^[\/?]$/) { # start search mode with / or ?
+	 if ($string =~ /^[\/?]$/) { # start search mode with / or ?
       ($self->{search_lnum}, $self->{search_cnum}) = $self->screen_cur();
       ($self->{search_slnum}, $self->{search_scnum}) = $self->screen_cur();
       my $line = $self->line($self->{search_lnum});
@@ -363,10 +368,16 @@ sub key_press_normal {
       $self->{search_scnum} = $self->{search_cnum};
       ($self->{search_olnum}, $self->{search_ocnum}) = $self->screen_cur();
       $self->{mode} = "search";
-      $self->{search} = "(?i)";
+      #$self->{search} = "(?i)";
+			$self->{search} = "";
       $self->{search_save} = $self->{search};
       $self->{search_history_index} = -1;
-      $self->{search_dir} = $string eq '/' ? -1 : 1;
+      #$self->{search_dir} = $string eq '/' ? -1 : 1;
+			if ($string =~ /\/.*/) { 
+					$self->{search_dir} = -1;
+			}else {
+					$self->{search_dir} = -1;
+			}
       $self->{search_wrap} = 0;
       $self->search_prompt;
    } elsif ($string eq "*") { # find word under the cursor
@@ -412,9 +423,9 @@ sub key_press_normal {
       $self->{search_wrap} = 0;
 
    # visual mode
-   } elsif ($string eq "v") { # start char based visual selection mode
+   } elsif ($string eq "v" or $string eq " ") { # start char based visual selection mode
       $self->{mode} = "visual";
-      $self->{mode_info} = "-- VISUAL -- ";
+      $self->{mode_info} = "-- VISUAL --";
       ($self->{visual_lnum}, $self->{visual_cnum}) = $self->screen_cur();
       my ($lnum, $cnum) = $self->screen_cur();
       $self->move_cursor($event, $lnum, $cnum);
@@ -440,28 +451,28 @@ sub key_press_normal {
       $self->term_write($event, $self->{registers}{'"'});
 
    # motions
-   } elsif ($string eq "j") {
+	 } elsif ($string eq "j" or $keysym eq "65364") {
       my ($lnum, $cnum) = $self->screen_cur();
       for(my $ii = 0; $ii < $self->{repeat}; $ii++){
          if ($lnum < $self->nrow - 2){
             $self->move_cursor($event, ++$lnum, $cnum);
          }
       }
-   } elsif ($string eq "k") {
+	 } elsif ($string eq "k" or $keysym eq "65362" ) {
       my ($lnum, $cnum) = $self->screen_cur();
       for(my $ii = 0; $ii < $self->{repeat}; $ii++){
          if ($lnum > $self->top_row){
             $self->move_cursor($event, --$lnum, $cnum);
          }
       }
-   } elsif ($string eq "h") {
+	 } elsif ($string eq "h" or $keysym eq "65361") {
       my ($lnum, $cnum) = $self->screen_cur();
       for(my $ii = 0; $ii < $self->{repeat}; $ii++){
          if ($cnum > 0){
             $self->move_cursor($event, $lnum, --$cnum);
          }
       }
-   } elsif ($string eq "l") {
+	 } elsif ($string eq "l" or $keysym eq "65363") {
       my ($lnum, $cnum) = $self->screen_cur();
       for(my $ii = 0; $ii < $self->{repeat}; $ii++){
          if ($cnum < $self->ncol - 1){
@@ -648,6 +659,7 @@ sub key_press_normal {
 sub key_press_search {
    my ($self, $event, $keysym, $string) =  @_;
 
+
    if ($keysym == 0xff0d || $keysym == 0xff8d) { # enter
       $self->normal_mode($event);
       unshift(@{$self->{search_history}}, $self->{search});
@@ -668,6 +680,7 @@ sub key_press_search {
       $self->{search_save} = $self->{search};
       $self->incremental_search($event);
    } elsif ($string !~ /[\x00-\x1f\x80-\xaf]/) {
+
       $self->{search} .= $self->locale_decode($string);
       $self->{search_save} = $self->{search};
       $self->incremental_search($event);
@@ -766,7 +779,6 @@ sub normal_mode {
 
 sub search {
    my ($self, $event, $dir, $move_cursor) = @_;
-
    my ($search_row, $search_col) = ($self->{search_lnum}, $self->{search_cnum});
    my ($search_srow, $search_scol) = ($self->{search_slnum}, $self->{search_scnum});
    my ($top_row, $bot_row) = ($self->top_row, $self->nrow);
@@ -872,7 +884,7 @@ sub incremental_search {
 sub search_prompt {
    my ($self) = @_;
    my $key = $self->{search_dir} == -1 ? '/' : '?';
-   $self->msg("$key$self->{search}█");
+	 $self->msg("$key$self->{search}");
 }
 
 sub move_cursor {
@@ -1042,16 +1054,16 @@ sub msg {
    my $end = $start - $self->nrow;
    my $label = '';
    if ($start == $self->top_row){
-      $label = 'Top';
+      $label = ' Top ';
    }elsif ($start == 0){
-      $label = 'Bot';
+      $label = ' Bottom ';
    }else{
       $label = sprintf("%i%%", (abs($start) / abs($self->top_row)) * 100);
    }
    my $percentage = sprintf(" %3s", $label);
 
    my $pad = $self->ncol - length($msg) - 3;
-   $msg = sprintf("%s %${pad}s", $msg, $self->{key_buffer} . $percentage);
+   $msg = sprintf("[vim-scrollback] %s %${pad}s", $msg, $self->{key_buffer} . $percentage);
 
    $self->{overlay} = $self->overlay(0, -1, $self->ncol, 1, $self->{msg_style}, 0);
    $self->{overlay}->set(0, 0, $msg);
